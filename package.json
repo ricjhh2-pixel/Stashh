@@ -1,0 +1,8 @@
+{
+  "name": "stash-proxy",
+  "version": "1.0.0",
+  "dependencies": {
+    "bedrock-protocol": "^1.18.0"
+  }
+}
+
