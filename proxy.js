@@ -1,55 +1,73 @@
-const { Relay } = require('bedrock-protocol')
+const fs = require('fs');
 
-const proxy = new Relay({
-  version: 'auto', 
-  host: '0.0.0.0',
-  port: 19132,
-  destination: {
-    host: 'asia.donutsmp.net', // <--- Udah diubah ke server Asia
-    port: 19132
+// Map untuk menyimpan lokasi semua container yang ditemukan
+// Format key: "x,y,z" -> type: 'hopper' | 'chest'
+const containerMap = new Map();
+const alertedLocations = new Set();
+
+function processBlockEntity(packet, client) {
+  if (!packet.position || !packet.id) return;
+
+  const { x, y, z } = packet.position;
+  const blockId = packet.id.toLowerCase();
+
+  let type = null;
+  if (blockId.includes('hopper')) type = 'hopper';
+  else if (blockId.includes('chest')) type = 'chest';
+
+  if (!type) return;
+
+  const posKey = `${x},${y},${z}`;
+  if (!containerMap.has(posKey)) {
+    containerMap.set(posKey, { x, y, z, type });
+    checkAreaCluster(x, y, z, client);
   }
-})
-
-let stashFinderActive = true
-
-proxy.on('connect', (player) => {
-  player.on('upstream', (packet, cancel) => {
-    if (packet.name === 'text' && packet.params.message.startsWith('.')) {
-      const msg = packet.params.message.toLowerCase().trim()
-      cancel()
-      if (msg === '.menu') {
-        sendLocalChat(player, '§e--- [ PROXY MENU ] --- \n§a.stash (On/Off) \n§a.status')
-      } else if (msg === '.stash') {
-        stashFinderActive = !stashFinderActive
-        sendLocalChat(player, `§bStash Finder: ${stashFinderActive ? '§aON' : '§cOFF'}`)
-      }
-    }
-  })
-
-  player.on('downstream', (packet) => {
-    if (stashFinderActive && packet.name === 'block_entity_data') {
-      const { x, y, z } = packet.params.position
-      const blockId = packet.params.nbt?.value?.id?.value || ''
-      const targetBlocks = ['Hopper', 'Dropper', 'Dispenser']
-
-      if (targetBlocks.some(id => blockId.includes(id))) {
-        sendLocalChat(player, `§c[STASH] §f${blockId} di X:${x} Y:${y} Z:${z}`)
-      }
-    }
-  })
-})
-
-function sendLocalChat(player, message) {
-  player.queue('text', {
-    type: 'raw',
-    needs_translation: false,
-    source_name: '§l§6[PROXY]§r',
-    message: message,
-    xuid: '',
-    platform_chat_id: ''
-  })
 }
 
-proxy.listen()
-console.log('--- PROXY AKTIF (ASIA) ---')
+// Fungsi Scan Area 48x48 Blok (3x3 Chunk Area)
+function checkAreaCluster(centerX, centerY, centerZ, client) {
+  const RADIUS = 24; // 24 blok ke kiri, kanan, depan, belakang (Total Area 48x48)
+  
+  let totalHoppers = 0;
+  let totalChests = 0;
 
+  for (const container of containerMap.values()) {
+    // Cek apakah container berada dalam jangkauan 48x48 blok
+    if (
+      Math.abs(container.x - centerX) <= RADIUS &&
+      Math.abs(container.z - centerZ) <= RADIUS &&
+      Math.abs(container.y - centerY) <= 40 // Toleransi beda tinggi 40 blok
+    ) {
+      if (container.type === 'hopper') totalHoppers++;
+      if (container.type === 'chest') totalChests++;
+    }
+  }
+
+  // Buat ID unik untuk area cluster ini agar tidak spamming chat
+  const clusterKey = `${Math.floor(centerX / 16)},${Math.floor(centerZ / 16)}`;
+
+  // SYARAT: Minimal 10 Hopper DAN Minimal 6 Chest dalam area 48x48 blok
+  if (totalHoppers >= 10 && totalChests >= 6 && !alertedLocations.has(clusterKey)) {
+    alertedLocations.add(clusterKey);
+
+    const logText = `[TARGET BASE] ${totalHoppers} Hoppers & ${totalChests} Chests | Area X:${centerX} Y:${centerY} Z:${centerZ}\n`;
+    fs.appendFileSync('stash_log.txt', logText);
+
+    // Kirim Notifikasi ke Chat Minecraft
+    client.write('text', {
+      type: 'json_chat',
+      needs_translation: false,
+      source_name: '',
+      message: JSON.stringify({
+        rawtext: [
+          { text: '§4§l[🚨 MAIN BASE DETECTED (48x48) 🚨]§r\n' },
+          { text: `§eKombinasi Area Terdeteksi:\n` },
+          { text: `§a✔ Hopper : §f${totalHoppers} unit (Min. 10)\n` },
+          { text: `§a✔ Chest  : §f${totalChests} unit (Min. 6)\n` },
+          { text: `§b📍 Koordinat Sekitar: §fX: ${centerX} | Y: ${centerY} | Z: ${centerZ}\n` },
+          { text: '§7================================' }
+        ]
+      })
+    });
+  }
+}
