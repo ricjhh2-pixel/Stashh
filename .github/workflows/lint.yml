@@ -1,0 +1,13 @@
+name: Check Code
+on: [push]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+      - run: npm install
+      - run: node -c proxy.js  # Ini perintah buat ngecek syntax error
+
